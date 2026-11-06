@@ -1,4 +1,4 @@
-# cam_localization: camera-only localization on a race track
+# Сamera-only localization on a race track
 
 **Update (2026-10-20):** all code that builds the model is now in [`map_builder/`](map_builder/README.md):
 `qwen_day.py` makes the synthetic day copy of the training run (Qwen-Image-Edit-2511), `build_map.sh` builds the
