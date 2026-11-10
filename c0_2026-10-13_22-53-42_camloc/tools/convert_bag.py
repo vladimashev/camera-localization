@@ -15,7 +15,7 @@ Writes data_bag/:
                                   except the first frame set, filled later by init_pose.py
   track_bounds.json, masks/       copied from the training data folder (same track, same car)
 """
-import argparse, json, re, shutil
+import argparse, json, os, re, shutil
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +35,10 @@ def main():
     ap.add_argument("--mcap", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--train-data", default="data", help="for track_bounds.json and masks/")
+    ap.add_argument("--lap", type=int, default=99, help="lap number given to the bag")
+    ap.add_argument("--with-train-index", action="store_true",
+                    help="also put the training frames index in (needed by featmap_mix: map "
+                         "keyframe poses and brightness come from --data)")
     a = ap.parse_args()
     out = Path(a.out)
     (out / "images").mkdir(parents=True, exist_ok=True)
@@ -74,16 +78,28 @@ def main():
     f = pd.DataFrame(rows, columns=["stamp_ns", "cam", "path"]).sort_values(["stamp_ns", "cam"])
     t0 = int(f.stamp_ns.min())
     f["t_rel"] = (f.stamp_ns - t0) * 1e-9
-    f["lap"] = 1
+    f["lap"] = a.lap
     for c in ["x", "y", "z", "qx", "qy", "qz", "qw", "yaw"]:
         f[c] = np.nan                       # no GT in this bag; init_pose.py fills the first set
     f["gt_ok"] = True
-    f.reset_index(drop=True).to_parquet(out / "frames.parquet")
     dur = float(f.t_rel.max()) + 1.0
-    pd.DataFrame({"lap": [1], "t_start": [0.0], "t_end": [dur], "duration_s": [dur],
-                  "complete": [True]}).to_csv(out / "laps.csv", index=False)
-
+    laps_rows = pd.DataFrame({"lap": [a.lap], "t_start": [0.0], "t_end": [dur],
+                              "duration_s": [dur], "complete": [True]})
     td = Path(a.train_data)
+    if a.with_train_index:
+        # the localizers also read the MAP keyframes from --data (their GT poses for the prior's
+        # z/roll/pitch, their images for the brightness statistics). Add the training index;
+        # its images are referenced in place (relative path), nothing is copied. The bag lap
+        # itself still has no GT.
+        tf = pd.read_parquet(td / "frames.parquet")
+        tf = tf[tf.lap != a.lap].copy()
+        tf["path"] = [os.path.relpath(td / p, out) for p in tf.path]
+        f = pd.concat([tf, f], ignore_index=True)
+        laps_rows = pd.concat([pd.read_csv(td / "laps.csv"), laps_rows], ignore_index=True)
+        print(f"training index added: {len(tf)} rows (map keyframes come from these)")
+    f.reset_index(drop=True).to_parquet(out / "frames.parquet")
+    laps_rows.to_csv(out / "laps.csv", index=False)
+
     if (td / "track_bounds.json").exists():
         shutil.copy(td / "track_bounds.json", out / "track_bounds.json")
     if (td / "masks").exists() and not (out / "masks").exists():

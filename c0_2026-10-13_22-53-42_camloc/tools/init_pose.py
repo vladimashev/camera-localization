@@ -89,13 +89,15 @@ def main():
     ap.add_argument("--x", type=float); ap.add_argument("--y", type=float)
     ap.add_argument("--yaw", type=float, help="rad")
     ap.add_argument("--top", type=int, default=5, help="DINOv2 candidates per camera")
+    ap.add_argument("--lap", type=int, default=99, help="lap number of the bag in frames.parquet")
     ap.add_argument("--check-sets", type=int, default=5)
     ap.add_argument("--shape", action="store_true",
                     help="DIAGNOSTIC: first pose from the shape of the whole lap (non-causal)")
     ap.add_argument("--train-data", default="data", help="for --shape: training gt_tf.parquet")
     a = ap.parse_args()
     data, mp = Path(a.data), Path(a.map)
-    f = pd.read_parquet(data / "frames.parquet")
+    f_all = pd.read_parquet(data / "frames.parquet")
+    f = f_all[f_all.lap == a.lap].copy()
     f["t_bin"] = (f.t_rel * 10).round().astype(int)
     sets = [s for _, s in f.groupby("t_bin")]
     loc = None
@@ -136,8 +138,8 @@ def main():
         pose = best[0]
         print(f"chosen first pose {tuple(round(v, 3) for v in pose)} with {best[1]} inliers")
 
-    if True:
-        # check: follow the twist, try a camera fix on the next frame sets
+    if a.check_sets > 0:
+        # check: follow the twist, try a camera fix on the next frame sets (featmap localizer)
         loc = loc or F.Localizer(data, mp, None, o=opts(a))
         s0 = sets[0]
         odom = F.make_odometry(data / "state.parquet", "vx_mps", "wz_radps", 1.0, "vy_mps")
@@ -158,10 +160,10 @@ def main():
 
     z = float(pd.read_parquet(mp / f"{F.json.loads((mp / 'meta.json').read_text())['cams'][0]}_kf.parquet").z.median())
     q = R.from_euler("z", pose[2]).as_quat()
-    m = f.t_bin == sets[0].t_bin.iloc[0]
+    first = sets[0].index
     for c, v in zip(["x", "y", "z", "qx", "qy", "qz", "qw", "yaw"], [*pose[:2], z, *q, pose[2]]):
-        f.loc[m, c] = v
-    f.drop(columns="t_bin").to_parquet(data / "frames.parquet")
+        f_all.loc[first, c] = v
+    f_all.to_parquet(data / "frames.parquet")
     (data / "first_pose.json").write_text(json.dumps({"x": pose[0], "y": pose[1], "yaw": pose[2]}))
     print(f"written into {data / 'frames.parquet'} (first frame set) and {data / 'first_pose.json'}")
 
